@@ -1,0 +1,390 @@
+# Install necessary packages if not already installed
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("caret")) install.packages("caret")
+if (!require("corrplot")) install.packages("corrplot")
+if (!require("GGally")) install.packages("GGally")
+if (!require("e1071")) install.packages("e1071")
+if (!require("VIM")) install.packages("VIM")
+if (!require("fastDummies")) install.packages("fastDummies")
+if (!require("nnet")) install.packages("nnet")
+if (!require("randomForest")) install.packages("randomForest")
+if (!require("kernlab")) install.packages("kernlab")
+if (!require("glmnet")) install.packages("glmnet")
+if (!require("xgboost")) install.packages("xgboost")
+if (!require("pROC")) install.packages("pROC")
+
+# Load libraries
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(GGally)
+library(e1071)
+library(dplyr)
+library(VIM)
+library(fastDummies)
+library(nnet)
+library(randomForest)
+library(kernlab)
+library(glmnet)
+library(xgboost)
+library(pROC)
+library(reshape2)
+
+# -------------------------------
+# 1. Data Loading and Inspection
+# -------------------------------
+df <- read_csv("COVID-19 Survey Student Responses.csv")  # Use `read.csv()` for non-tidyverse workflows
+
+# Inspect the dataset
+head(df)
+dim(df)  # Check dimensions
+colnames(df)  # Check column names
+str(df)  # Check structure
+summary(df)  # Summary statistics
+
+# -------------------------------
+# 2. Data Preprocessing
+# -------------------------------
+# Check missing values
+missing_values <- colSums(is.na(df))
+print(missing_values)
+
+# Count duplicate rows
+duplicate_count <- nrow(df) - nrow(distinct(df))
+cat("Number of duplicate rows:", duplicate_count, "\n")
+
+# Remove rows with missing values
+df <- na.omit(df)
+
+# Convert character columns to factors
+df <- df %>%
+  mutate(across(where(is.character), as.factor))
+
+# Handle ordinal variables (modify levels and column names as needed)
+df <- df %>%
+  mutate(
+    `Rating of Online Class experience` = factor(`Rating of Online Class experience`, 
+                                                 levels = c("Very poor", "Poor", "Average", "Good", "Excellent"), 
+                                                 ordered = TRUE),
+    `Time spent on Online Class` = factor(`Time spent on Online Class`, 
+                                          levels = c("0", "1-2", "3-4", "5-6", "7+"), 
+                                          ordered = TRUE)
+  )
+
+# Create a target variable based on `Stress busters`
+df <- df %>%
+  mutate(
+    Target_Variable = case_when(
+      `Stress busters` == "Sleeping" ~ "Category_1",
+      `Stress busters` == "Listening to music" ~ "Category_2",
+      `Stress busters` == "Watching web series" ~ "Category_3",
+      TRUE ~ "Unknown"  # Catch-all for unexpected cases
+    )
+  )
+
+# Convert Target_Variable to an ordered factor
+df$Target_Variable <- factor(df$Target_Variable, 
+                             levels = c("Category_1", "Category_2", "Category_3", "Unknown"), 
+                             ordered = TRUE)
+
+# Remove rows where Target_Variable is "Unknown"
+df <- df %>%
+  filter(Target_Variable != "Unknown")
+
+# Drop unused levels
+df$Target_Variable <- droplevels(df$Target_Variable)
+
+# Reduce levels in categorical variables to avoid high cardinality
+library(forcats)
+df$`Region of residence` <- fct_lump(df$`Region of residence`, n = 10)  # Keep top 10 levels, combine rest as "Other"
+df$`Stress busters` <- fct_lump(df$`Stress busters`, n = 10)
+
+# Scale numeric columns
+df <- df %>%
+  mutate(across(where(is.numeric), ~scale(.) %>% as.numeric()))
+
+# -------------------------------
+# 3. Enhanced Exploratory Data Analysis (EDA)
+# -------------------------------
+
+# 1. Univariate Analysis
+# Age Distribution with Kernel Density Plot
+ggplot(df, aes(x = `Age of Subject`)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, fill = "blue", alpha = 0.7) +  
+  geom_density(color = "red", linewidth = 1) +  
+  labs(title = "Age Distribution with Density Plot", x = "Age", y = "Density") +
+  theme_minimal()
+
+# Stress Buster Distribution
+ggplot(df, aes(x = `Stress busters`)) +
+  geom_bar(fill = "purple", linewidth = 0.5) +  
+  theme_minimal() +
+  coord_flip() +  
+  labs(title = "Distribution of Stress Busters", x = "Stress Buster", y = "Count")
+
+# Rating of Online Class Experience
+ggplot(df, aes(x = `Rating of Online Class experience`)) +
+  geom_bar(fill = "green", linewidth = 0.5) +  
+  theme_minimal() +
+  labs(title = "Rating of Online Class Experience", x = "Rating", y = "Count")
+
+# Time Spent on Online Class
+ggplot(df, aes(x = `Time spent on Online Class`)) +
+  geom_bar(fill = "orange", linewidth = 0.5) +  
+  theme_minimal() +
+  labs(title = "Time Spent on Online Class", x = "Hours per Day", y = "Count")
+
+# Additional Histograms
+# Histogram of Age of Subject
+ggplot(df, aes(x = `Age of Subject`)) +
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  labs(title = "Histogram of Age of Subject", x = "Age", y = "Count") +
+  theme_minimal()
+
+# Histogram of Time spent on self study
+ggplot(df, aes(x = `Time spent on self study`)) +
+  geom_histogram(bins = 30, fill = "green", alpha = 0.7) +
+  labs(title = "Histogram of Time spent on self study", x = "Hours per Day", y = "Count") +
+  theme_minimal()
+
+# Histogram of Time spent on fitness
+ggplot(df, aes(x = `Time spent on fitness`)) +
+  geom_histogram(bins = 30, fill = "red", alpha = 0.7) +
+  labs(title = "Histogram of Time spent on fitness", x = "Hours per Day", y = "Count") +
+  theme_minimal()
+
+# Histogram of Time spent on sleep
+ggplot(df, aes(x = `Time spent on sleep`)) +
+  geom_histogram(bins = 30, fill = "purple", alpha = 0.7) +
+  labs(title = "Histogram of Time spent on sleep", x = "Hours per Day", y = "Count") +
+  theme_minimal()
+
+# 2. Bivariate Analysis
+# Age vs Stress Buster
+ggplot(df, aes(x = `Stress busters`, y = `Age of Subject`, fill = `Stress busters`)) +
+  geom_boxplot(linewidth = 0.5) +  
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Age vs Stress Buster", x = "Stress Buster", y = "Age")
+
+# Region of Residence vs Target Variable
+ggplot(df, aes(x = `Region of residence`, fill = Target_Variable)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Target Variable Distribution by Region of Residence", x = "Region of Residence", y = "Proportion")
+
+# Time Spent on Online Class vs Rating of Online Class Experience
+ggplot(df, aes(x = `Time spent on Online Class`, y = `Rating of Online Class experience`, fill = `Time spent on Online Class`)) +
+  geom_boxplot(linewidth = 0.5) +  
+  theme_minimal() +
+  labs(title = "Time Spent on Online Class vs Rating", x = "Time Spent", y = "Rating")
+
+# 3. Multivariate Analysis
+# Interaction between Stress Busters and Region of Residence
+ggplot(df, aes(x = `Region of residence`, fill = `Stress busters`)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Stress Busters by Region of Residence", x = "Region of Residence", y = "Proportion")
+
+# Pairwise Relationships Between Numeric Variables
+numeric_data <- df %>% select_if(is.numeric)
+GGally::ggpairs(numeric_data, title = "Pairwise Relationships Between Numeric Variables")
+
+# Heatmap of Correlation Matrix
+numeric_data <- df %>% select_if(is.numeric)
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+melted_cor <- reshape2::melt(cor_matrix)
+
+# Correlation Heatmap using ggplot2
+ggplot(melted_cor, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Correlation Heatmap", x = "", y = "")
+
+# 4. Statistical Summaries
+# Descriptive Statistics for Numeric Columns
+summary_stats <- df %>%
+  select(where(is.numeric)) %>%
+  summarise(across(everything(), list(mean = mean, sd = sd, min = min, max = max), na.rm = TRUE))
+print(summary_stats)
+
+# Frequency Table for Categorical Variables
+cat("
+Frequency Table for Region of Residence:
+")
+table(df$`Region of residence`)
+cat("
+Frequency Table for Stress Busters:
+")
+table(df$`Stress busters`)
+
+# Cross-tabulation of Target Variable and Stress Busters
+cat("
+Cross-tabulation of Target Variable and Stress Busters:
+")
+table(df$Target_Variable, df$`Stress busters`)
+
+# 5. Advanced Visualizations
+# Polar Plot for Stress Busters
+df %>%
+  count(`Stress busters`) %>%
+  mutate(angle = n / sum(n) * 2 * pi) %>%
+  ggplot(aes(x = "", y = n, fill = `Stress busters`)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  theme_void() +
+  labs(title = "Polar Plot of Stress Busters")
+
+# Scatterplot Matrix for Numeric Variables
+pairs(numeric_data, main = "Scatterplot Matrix for Numeric Variables", pch = 19, col = "blue")
+
+# Missing Value Visualization
+# Missingness Map
+aggr_plot <- VIM::aggr(df, col = c("navyblue", "red"), numbers = TRUE, 
+                       sortVars = TRUE, labels = names(df), cex.axis = .7, gap = 3, 
+                       ylab = c("Histogram of missing data", "Pattern"))
+
+# -------------------------------
+# 4. Modeling and Evaluation
+# -------------------------------
+# Train-test split
+set.seed(123)  # For reproducibility
+train_indices <- createDataPartition(df$Target_Variable, p = 0.8, list = FALSE)
+train_data <- df[train_indices, ]
+test_data <- df[-train_indices, ]
+
+# Ensure no missing values in train_data and test_data
+train_data <- na.omit(train_data)
+test_data <- na.omit(test_data)
+
+# Create x_train and y_train
+x_train <- model.matrix(Target_Variable ~ . - 1, data = train_data)  # Remove intercept
+y_train <- train_data$Target_Variable
+
+# Ensure y_train is a factor for multinomial regression
+y_train <- as.factor(y_train)
+
+# Combine classes with fewer than 8 observations
+class_counts <- table(y_train)
+if (any(class_counts < 8)) {
+  cat("Combining classes with fewer than 8 observations...\n")
+  train_data <- train_data %>%
+    mutate(Target_Variable = case_when(
+      Target_Variable == "Category_3" ~ "Category_2",  # Combine Category_3 with Category_2
+      TRUE ~ Target_Variable
+    ))
+  
+  # Update y_train
+  y_train <- as.factor(train_data$Target_Variable)
+  
+  # Recreate x_train to reflect the changes in Target_Variable
+  x_train <- model.matrix(Target_Variable ~ . - 1, data = train_data)  # Remove intercept
+}
+
+# Cross-validation to find the best lambda
+cv_fit <- cv.glmnet(x_train, y_train, family = "multinomial", nfolds = 3)  # Use 3-fold CV
+best_lambda <- cv_fit$lambda.min
+
+# Train final model with best lambda
+final_model <- glmnet(x_train, y_train, family = "multinomial", lambda = best_lambda)
+
+# Prepare test data
+x_test <- model.matrix(Target_Variable ~ . - 1, data = test_data)  # Remove intercept
+y_test <- test_data$Target_Variable
+
+# Predictions
+predictions <- predict(final_model, newx = x_test, type = "class")
+
+# Ensure predictions and y_test are factors with the same levels
+predictions <- as.factor(predictions)
+y_test <- as.factor(y_test)
+
+# Check levels of predictions and y_test
+cat("Levels in predictions:", levels(predictions), "\n")
+cat("Levels in y_test:", levels(y_test), "\n")
+
+# Ensure both have the same levels
+levels(predictions) <- levels(y_test)
+
+# Check dimensions of predictions and y_test
+cat("Dimensions of predictions:", length(predictions), "\n")
+cat("Dimensions of y_test:", length(y_test), "\n")
+
+# Ensure no missing values in predictions or y_test
+if (any(is.na(predictions)) || any(is.na(y_test))) {
+  stop("Missing values found in predictions or y_test. Please handle missing values.")
+}
+
+# Compute confusion matrix
+conf_matrix <- confusionMatrix(predictions, y_test)
+print(conf_matrix)
+
+# -------------------------------
+# 5. Additional Modeling (Random Forest and SVM)
+# -------------------------------
+# Random Forest Model
+rf_model <- train(
+  Target_Variable ~ .,
+  data = train_data,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 5),
+  importance = TRUE
+)
+
+# Evaluate Random Forest
+rf_predictions <- predict(rf_model, newdata = test_data)
+
+# Align factor levels between rf_predictions and test_data$Target_Variable
+rf_predictions <- factor(rf_predictions, levels = levels(test_data$Target_Variable))
+
+# Confusion Matrix for Random Forest
+confusionMatrix(rf_predictions, test_data$Target_Variable)
+
+# Feature Importance
+varImp(rf_model)
+plot(varImp(rf_model))
+
+# Support Vector Machine (SVM) Model
+svm_model <- train(
+  Target_Variable ~ .,
+  data = train_data,
+  method = "svmRadial",
+  trControl = trainControl(method = "cv", number = 5)
+)
+
+# Evaluate SVM
+svm_predictions <- predict(svm_model, newdata = test_data)
+
+# Align factor levels between svm_predictions and test_data$Target_Variable
+svm_predictions <- factor(svm_predictions, levels = levels(test_data$Target_Variable))
+
+# Confusion Matrix for SVM
+confusionMatrix(svm_predictions, test_data$Target_Variable)
+
+# -------------------------------
+# 6. ROC-AUC Analysis (Corrected)
+# -------------------------------
+# Predict probabilities using the Random Forest model
+predicted_probabilities <- predict(rf_model, newdata = test_data, type = "prob")
+
+# Compute ROC curves for each class
+roc_category_1 <- roc(test_data$Target_Variable == "Category_1", predicted_probabilities[, "Category_1"])
+roc_category_2 <- roc(test_data$Target_Variable == "Category_2", predicted_probabilities[, "Category_2"])
+
+
+# Calculate AUC for each class
+auc_category_1 <- auc(roc_category_1)
+auc_category_2 <- auc(roc_category_2)
+
+
+# Print AUC values
+cat("AUC for Category_1:", auc_category_1, "\n")
+cat("AUC for Category_2:", auc_category_2, "\n")
+
+
+
+
+
